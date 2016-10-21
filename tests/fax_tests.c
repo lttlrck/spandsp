@@ -39,12 +39,17 @@
 #include <assert.h>
 #include <sndfile.h>
 
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <poll.h>
+
+
 //#if defined(WITH_SPANDSP_INTERNALS)
 #define SPANDSP_EXPOSE_INTERNAL_STRUCTURES
 //#endif
 
 #include "spandsp.h"
-#include "spandsp-sim.h"
+//#include "spandsp-sim.h"
 
 #include "fax_utils.h"
 
@@ -59,7 +64,9 @@
 struct machine_s
 {
     int chan;
+    // int16_t amp[SAMPLES_PER_CHUNK];
     int16_t amp[SAMPLES_PER_CHUNK];
+    // int len;
     int len;
     fax_state_t *fax;
     awgn_state_t *awgn;
@@ -74,73 +81,92 @@ int use_receiver_not_ready = FALSE;
 int test_local_interrupt = FALSE;
 int t30_state_to_wreck = -1;
 
+bool enableLog;
+
 static int phase_b_handler(t30_state_t *s, void *user_data, int result)
 {
-    int i;
-    char tag[20];
+    if( enableLog) {
+    // if(1) {
 
-    i = (int) (intptr_t) user_data;
-    snprintf(tag, sizeof(tag), "%c: Phase B", i);
-    printf("%c: Phase B handler on channel %c - (0x%X) %s\n", i, i, result, t30_frametype(result));
-    log_rx_parameters(s, tag);
+        int i;
+        char tag[20];
+
+        i = (int) (intptr_t) user_data;
+        snprintf(tag, sizeof(tag), "%c: Phase B", i);
+        printf("%c: Phase B handler on channel %c - (0x%X) %s\n", i, i, result, t30_frametype(result));
+        fax_log_rx_parameters(s, tag);
+    }
+
     return T30_ERR_OK;
 }
 /*- End of function --------------------------------------------------------*/
 
 static int phase_d_handler(t30_state_t *s, void *user_data, int result)
 {
-    int i;
-    char tag[20];
+    // if(1) {
+    if( enableLog) {
 
-    i = (int) (intptr_t) user_data;
-    snprintf(tag, sizeof(tag), "%c: Phase D", i);
-    printf("%c: Phase D handler on channel %c - (0x%X) %s\n", i, i, result, t30_frametype(result));
-    log_transfer_statistics(s, tag);
-    log_tx_parameters(s, tag);
-    log_rx_parameters(s, tag);
+        int i;
+        char tag[20];
 
-    if (use_receiver_not_ready)
-        t30_set_receiver_not_ready(s, 3);
+        i = (int) (intptr_t) user_data;
+        snprintf(tag, sizeof(tag), "%c: Phase D", i);
+        printf("%c: Phase D handler on channel %c - (0x%X) %s\n", i, i, result, t30_frametype(result));
+        fax_log_page_transfer_statistics(s, tag);
+        fax_log_tx_parameters(s, tag);
+        fax_log_rx_parameters(s, tag);
 
-    if (test_local_interrupt)
-    {
-        if (i == 0)
+        if (use_receiver_not_ready)
+            t30_set_receiver_not_ready(s, 3);
+
+        if (test_local_interrupt)
         {
-            printf("%d: Initiating interrupt request\n", i);
-            t30_local_interrupt_request(s, TRUE);
-        }
-        else
-        {
-            switch (result)
+            if (i == 0)
             {
-            case T30_PIP:
-            case T30_PRI_MPS:
-            case T30_PRI_EOM:
-            case T30_PRI_EOP:
-                printf("%d: Accepting interrupt request\n", i);
+                printf("%d: Initiating interrupt request\n", i);
                 t30_local_interrupt_request(s, TRUE);
-                break;
-            case T30_PIN:
-                break;
+            }
+            else
+            {
+                switch (result)
+                {
+                case T30_PIP:
+                case T30_PRI_MPS:
+                case T30_PRI_EOM:
+                case T30_PRI_EOP:
+                    printf("%d: Accepting interrupt request\n", i);
+                    t30_local_interrupt_request(s, TRUE);
+                    break;
+                case T30_PIN:
+                    break;
+                }
             }
         }
     }
+
     return T30_ERR_OK;
 }
 /*- End of function --------------------------------------------------------*/
 
 static void phase_e_handler(t30_state_t *s, void *user_data, int result)
 {
+    // if(1) {
     int i;
-    t30_stats_t t;
-    char tag[20];
-
     i = (intptr_t) user_data;
-    snprintf(tag, sizeof(tag), "%c: Phase E", i);
-    printf("%c: Phase E handler on channel %c - (%d) %s\n", i, i, result, t30_completion_code_to_str(result));    
-    log_transfer_statistics(s, tag);
-    log_tx_parameters(s, tag);
-    log_rx_parameters(s, tag);
+
+    if( enableLog) {
+
+        char tag[20];
+
+        snprintf(tag, sizeof(tag), "%c: Phase E", i);
+        printf("%c: Phase E handler on channel %c - (%d) %s\n", i, i, result, t30_completion_code_to_str(result));
+        fax_log_final_transfer_statistics(s, tag);
+        fax_log_tx_parameters(s, tag);
+        fax_log_rx_parameters(s, tag);
+
+    }
+
+    t30_stats_t t;
     t30_get_transfer_statistics(s, &t);
     machines[i - 'A'].succeeded = (result == T30_ERR_OK)  &&  (t.pages_tx == 12  ||  t.pages_rx == 12);
     machines[i - 'A'].done = TRUE;
@@ -153,27 +179,56 @@ static void real_time_frame_handler(t30_state_t *s,
                                     const uint8_t *msg,
                                     int len)
 {
-    int i;
-    
-    i = (intptr_t) user_data;
-    printf("%c: Real time frame handler on channel %c - %s, %s, length = %d\n",
-           i,
-           i,
-           (direction)  ?  "line->T.30"  : "T.30->line",
-           t30_frametype(msg[2]),
-           len);
+    if( enableLog) {
+
+        int i;
+
+        i = (intptr_t) user_data;
+        printf("%c: Real time frame handler on channel %c - %s, %s, length = %d\n",
+               i,
+               i,
+               (direction)  ?  "line->T.30"  : "T.30->line",
+               t30_frametype(msg[2]),
+               len);
+    }
 }
 /*- End of function --------------------------------------------------------*/
 
 static int document_handler(t30_state_t *s, void *user_data, int event)
 {
-    int i;
-    
-    i = (intptr_t) user_data;
-    printf("%c: Document handler on channel %c - event %d\n", i, i, event);
+    if( enableLog) {
+
+        int i;
+
+        i = (intptr_t) user_data;
+        printf("%c: Document handler on channel %c - event %d\n", i, i, event);
+    }
+
     return FALSE;
 }
 /*- End of function --------------------------------------------------------*/
+
+void printArray( const uint8_t *data, const size_t length, const size_t width)
+{
+    uint32_t i= 0;
+
+    while( i < length)
+    {
+        if((i % width) == 0)
+        {
+            if( i)
+                printf("\n");
+
+            printf("%02X:",i);
+        }
+
+        printf("%02X ", *(data+i));
+
+        i++;
+    }
+
+    printf("\n");
+}
 
 int main(int argc, char *argv[])
 {
@@ -190,11 +245,14 @@ int main(int argc, char *argv[])
     int alldone;
     const char *input_tiff_file_name;
     const char *input_audio_file_name;
+    const char *pipe_name;
     int log_audio;
     int use_ecm;
     int use_tep;
     int use_transmit_on_idle;
+#if defined(WITH_SPANDSP_INTERNALS)
     int use_line_hits;
+#endif
     int polled_mode;
     int reverse_flow;
     int use_page_limits;
@@ -207,6 +265,10 @@ int main(int argc, char *argv[])
     int scan_line_time;
     char *page_header_info;
     int opt;
+    bool default_code;
+    bool receiver;
+    bool sender;
+    bool b2b;
     t30_state_t *t30;
     logging_state_t *logging;
 
@@ -214,7 +276,9 @@ int main(int argc, char *argv[])
     input_tiff_file_name = INPUT_TIFF_FILE_NAME;
     input_audio_file_name = NULL;
     use_ecm = FALSE;
+#if defined(WITH_SPANDSP_INTERNALS)
     use_line_hits = FALSE;
+#endif
     use_tep = FALSE;
     polled_mode = FALSE;
     page_header_info = NULL;
@@ -225,16 +289,37 @@ int main(int argc, char *argv[])
     signal_level = 0;
     noise_level = -99;
     scan_line_time = 0;
+    default_code = TRUE;
+    receiver = FALSE;
+    sender = FALSE;
+    b2b = FALSE;
+    enableLog = FALSE;
     supported_modems = T30_SUPPORT_V27TER | T30_SUPPORT_V29 | T30_SUPPORT_V17;
-    while ((opt = getopt(argc, argv, "ehH:i:I:lm:n:prRs:S:tTw:")) != -1)
+    while ((opt = getopt(argc, argv, "behH:i:I:lLm:n:oOpP:rRs:S:tTw:")) != -1)
     {
         switch (opt)
         {
+        case 'b':
+            b2b = TRUE;
+            printf("b2b\n");
+            break;
         case 'e':
             use_ecm = TRUE;
             break;
+#if defined(WITH_SPANDSP_INTERNALS)
         case 'h':
             use_line_hits = TRUE;
+            break;
+#endif
+        case 'o':
+            default_code = FALSE;
+            receiver = TRUE;
+            printf("receiver\n");
+            break;
+        case 'O':
+            default_code = FALSE;
+            sender = TRUE;
+            printf("sender\n");
             break;
         case 'H':
             page_header_info = optarg;
@@ -242,11 +327,17 @@ int main(int argc, char *argv[])
         case 'i':
             input_tiff_file_name = optarg;
             break;
+        case 'P':
+            pipe_name = optarg;
+            break;
         case 'I':
             input_audio_file_name = optarg;
             break;
         case 'l':
             log_audio = TRUE;
+            break;
+        case 'L':
+            enableLog = TRUE;
             break;
         case 'm':
             supported_modems = atoi(optarg);
@@ -403,117 +494,285 @@ int main(int argc, char *argv[])
                     t30_set_tx_file(t30, input_tiff_file_name, -1, -1);
             }
         }
+
         t30_set_phase_b_handler(t30, phase_b_handler, (void *) (intptr_t) mc->chan + 'A');
         t30_set_phase_d_handler(t30, phase_d_handler, (void *) (intptr_t) mc->chan + 'A');
         t30_set_phase_e_handler(t30, phase_e_handler, (void *) (intptr_t) mc->chan + 'A');
         t30_set_real_time_frame_handler(t30, real_time_frame_handler, (void *) (intptr_t) mc->chan + 'A');
         t30_set_document_handler(t30, document_handler, (void *) (intptr_t) mc->chan + 'A');
-        sprintf(mc->tag, "FAX-%d", j + 1);
 
-        logging = t30_get_logging_state(t30);
-        span_log_set_level(logging, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME | SPAN_LOG_FLOW);
-        span_log_set_tag(logging, mc->tag);
-        if ((j & 1))
-        {
-            span_log_set_level(&t30->t4.rx.logging, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME | SPAN_LOG_FLOW);
-            span_log_set_tag(&t30->t4.rx.logging, mc->tag);
+        if(enableLog) {
+
+            sprintf(mc->tag, "FAX-%d", j + 1);
+
+            logging = t30_get_logging_state(t30);
+            span_log_set_level(logging, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME | SPAN_LOG_FLOW);
+            span_log_set_tag(logging, mc->tag);
+            if ((j & 1))
+            {
+                span_log_set_level(&t30->t4.rx.logging, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME | SPAN_LOG_FLOW);
+                span_log_set_tag(&t30->t4.rx.logging, mc->tag);
+            }
+            else
+            {
+                span_log_set_level(&t30->t4.tx.logging, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME | SPAN_LOG_FLOW);
+                span_log_set_tag(&t30->t4.tx.logging, mc->tag);
+            }
+            logging = fax_get_logging_state(mc->fax);
+            span_log_set_level(logging, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME | SPAN_LOG_FLOW);
+            span_log_set_tag(logging, mc->tag);
         }
-        else
-        {
-            span_log_set_level(&t30->t4.tx.logging, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME | SPAN_LOG_FLOW);
-            span_log_set_tag(&t30->t4.tx.logging, mc->tag);
-        }
-        logging = fax_get_logging_state(mc->fax);
-        span_log_set_level(logging, SPAN_LOG_SHOW_SEVERITY | SPAN_LOG_SHOW_PROTOCOL | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME | SPAN_LOG_FLOW);
-        span_log_set_tag(logging, mc->tag);
 
         memset(mc->amp, 0, sizeof(mc->amp));
         mc->total_audio_time = 0;
         mc->done = FALSE;
     }
     time(&start_time);
-    for (;;)
-    {
-        alldone = TRUE;
-        for (j = 0;  j < FAX_MACHINES;  j++)
-        {
-            mc = &machines[j];
 
-            if ((j & 1) == 0  &&  input_audio_file_name)
+    if( default_code) {
+
+        for (;;) // this becomes timer driven
+        {
+            alldone = TRUE;
+            for (j = 0;  j < FAX_MACHINES;  j++)
             {
-                mc->len = sf_readf_short(input_wave_handle, mc->amp, SAMPLES_PER_CHUNK);
-                if (mc->len == 0)
-                    break;
-            }
-            else
-            {
-                mc->len = fax_tx(mc->fax, mc->amp, SAMPLES_PER_CHUNK);
-                if (mc->awgn)
+                mc = &machines[j];
+
+                if ((j & 1) == 0  &&  input_audio_file_name)
+                {
+                    mc->len = sf_readf_short(input_wave_handle, mc->amp, SAMPLES_PER_CHUNK);
+                    if (mc->len == 0)
+                        break;
+                }
+                else
+                {
+                    mc->len = fax_tx(mc->fax, mc->amp, SAMPLES_PER_CHUNK);
+                    if (mc->awgn)
+                    {
+                        for (k = 0;  k < mc->len;  k++)
+                            mc->amp[k] = ((int16_t) (mc->amp[k]*signal_scaling)) + awgn(mc->awgn);
+                    }
+                }
+                mc->total_audio_time += SAMPLES_PER_CHUNK;
+                if (!use_transmit_on_idle)
+                {
+                    /* The receive side always expects a full block of samples, but the
+                       transmit side may not be sending any when it doesn't need to. We
+                       may need to pad with some silence. */
+                    if (mc->len < SAMPLES_PER_CHUNK)
+                    {
+                        memset(mc->amp + mc->len, 0, sizeof(int16_t)*(SAMPLES_PER_CHUNK - mc->len));
+                        mc->len = SAMPLES_PER_CHUNK;
+                    }
+                }
+                t30 = fax_get_t30_state(mc->fax);
+                logging = t30_get_logging_state(t30);
+                span_log_bump_samples(logging, mc->len);
+                logging = fax_get_logging_state(mc->fax);
+                span_log_bump_samples(logging, mc->len);
+
+                if (log_audio)
                 {
                     for (k = 0;  k < mc->len;  k++)
-                        mc->amp[k] = ((int16_t) (mc->amp[k]*signal_scaling)) + awgn(mc->awgn);
+                        out_amp[2*k + j] = mc->amp[k];
                 }
-            }
-            mc->total_audio_time += SAMPLES_PER_CHUNK;
-            if (!use_transmit_on_idle)
-            {
-                /* The receive side always expects a full block of samples, but the
-                   transmit side may not be sending any when it doesn't need to. We
-                   may need to pad with some silence. */
-                if (mc->len < SAMPLES_PER_CHUNK)
+                if (machines[j ^ 1].len < SAMPLES_PER_CHUNK)
+                    memset(machines[j ^ 1].amp + machines[j ^ 1].len, 0, sizeof(int16_t)*(SAMPLES_PER_CHUNK - machines[j ^ 1].len)); // << this is where the data moves from tx<->rx
+                t30 = fax_get_t30_state(mc->fax);
+    #if defined(WITH_SPANDSP_INTERNALS)
+                if (use_line_hits)
                 {
-                    memset(mc->amp + mc->len, 0, sizeof(int16_t)*(SAMPLES_PER_CHUNK - mc->len));
-                    mc->len = SAMPLES_PER_CHUNK;
+                    /* TODO: This applies very crude line hits. improve it */
+                    if (t30->state == 22)
+                    {
+                        if (++mc->error_delay == 100)
+                        {
+                            fprintf(stderr, "HIT %d!\n", j);
+                            mc->error_delay = 0;
+                            for (k = 0;  k < 5;  k++)
+                                mc->amp[k] = 0;
+                        }
+                    }
                 }
+                if (t30->state == t30_state_to_wreck)
+                    memset(machines[j ^ 1].amp, 0, sizeof(int16_t)*SAMPLES_PER_CHUNK);
+    #endif
+                if (fax_rx(mc->fax, machines[j ^ 1].amp, SAMPLES_PER_CHUNK))
+                    break;
+                if (!mc->done)
+                    alldone = FALSE;
             }
-            t30 = fax_get_t30_state(mc->fax);
-            logging = t30_get_logging_state(t30);
-            span_log_bump_samples(logging, mc->len);
-            logging = fax_get_logging_state(mc->fax);
-            span_log_bump_samples(logging, mc->len);
 
             if (log_audio)
             {
-                for (k = 0;  k < mc->len;  k++)
-                    out_amp[2*k + j] = mc->amp[k];
+                outframes = sf_writef_short(wave_handle, out_amp, SAMPLES_PER_CHUNK);
+                if (outframes != SAMPLES_PER_CHUNK)
+                    break;
             }
-            if (machines[j ^ 1].len < SAMPLES_PER_CHUNK)
-                memset(machines[j ^ 1].amp + machines[j ^ 1].len, 0, sizeof(int16_t)*(SAMPLES_PER_CHUNK - machines[j ^ 1].len));
-            t30 = fax_get_t30_state(mc->fax);
-#if defined(WITH_SPANDSP_INTERNALS)
-            if (use_line_hits)
-            {
-                /* TODO: This applies very crude line hits. improve it */
-                if (t30->state == 22)
-                {
-                    if (++mc->error_delay == 100)
-                    {
-                        fprintf(stderr, "HIT %d!\n", j);
-                        mc->error_delay = 0;
-                        for (k = 0;  k < 5;  k++)
-                            mc->amp[k] = 0;
-                    }
-                }    
-            }
-            if (t30->state == t30_state_to_wreck)
-                memset(machines[j ^ 1].amp, 0, sizeof(int16_t)*SAMPLES_PER_CHUNK);
-#endif
-            if (fax_rx(mc->fax, machines[j ^ 1].amp, SAMPLES_PER_CHUNK))
-                break;
-            if (!mc->done)
-                alldone = FALSE;
-        }
 
-        if (log_audio)
-        {
-            outframes = sf_writef_short(wave_handle, out_amp, SAMPLES_PER_CHUNK);
-            if (outframes != SAMPLES_PER_CHUNK)
+            if (alldone  ||  j < FAX_MACHINES)
                 break;
         }
-
-        if (alldone  ||  j < FAX_MACHINES)
-            break;
     }
+
+    if( receiver || sender) {
+
+        char * fn = pipe_name;
+        struct sockaddr_un ca;
+        memset(&ca, 0, sizeof(ca));
+        ca.sun_family = AF_UNIX;
+        strncpy(ca.sun_path, fn, 104);
+
+        int sockfd= socket( AF_UNIX, SOCK_STREAM, 0);
+
+        printf("Socket %d %s\n", sockfd, fn);
+
+        if( receiver) {
+
+            j= 1;
+
+            if( b2b) {
+
+                int r= connect( sockfd, (struct sockaddr *) &ca, sizeof(ca));
+
+                printf("Connect %d %d\n", r, getpid());
+            }
+            else {
+
+                unlink( fn);
+
+                int r= bind( sockfd, (struct sockaddr *) &ca, sizeof(ca));
+
+                printf("Bind %d\n", r);
+
+                if( listen( sockfd, 5) == -1) {
+                    perror("listen error");
+                }
+
+                int cl;
+
+                while (1) {
+
+                    if ( (cl = accept(sockfd, NULL, NULL)) == -1) {
+                      perror("accept error");
+                      continue;
+                    } else {
+                        break;
+                    }
+                }
+
+                sockfd= cl;
+            }
+        }
+        else {
+
+            j= 0;
+
+            unlink( fn);
+
+            int r= bind( sockfd, (struct sockaddr *) &ca, sizeof(ca));
+
+            printf("Bind %d\n", r);
+
+            if( listen( sockfd, 5) == -1) {
+                perror("listen error");
+            }
+
+            int cl;
+
+            while (1) {
+
+                if ( (cl = accept(sockfd, NULL, NULL)) == -1) {
+                  perror("accept error");
+                  continue;
+                } else {
+                    break;
+                }
+            }
+
+            sockfd= cl;
+        }
+
+        struct pollfd fd;
+        int ret;
+
+        fd.fd = sockfd;
+        fd.events = POLLIN;
+
+        bool block= false;
+
+        if( sender) block= true;
+
+        for( ;;) {
+
+            alldone = TRUE;
+
+            //for (j = 0;  j < FAX_MACHINES;  j++)
+            {
+                mc = &machines[j];
+
+                mc->len = fax_tx(mc->fax, mc->amp, SAMPLES_PER_CHUNK);
+
+                uint32_t qlen= mc->len;
+
+                write( sockfd, &qlen, 4);
+
+                int sent= write( sockfd, mc->amp, mc->len*sizeof(int16_t));
+
+                mc->total_audio_time += SAMPLES_PER_CHUNK;
+
+                if(enableLog) {
+
+                    t30 = fax_get_t30_state(mc->fax);
+                    logging = t30_get_logging_state(t30);
+                    span_log_bump_samples(logging, mc->len);
+                    logging = fax_get_logging_state(mc->fax);
+                    span_log_bump_samples(logging, mc->len);
+                }
+
+                t30 = fax_get_t30_state(mc->fax);
+
+                read( sockfd, &qlen, 4);
+
+                mc->len = read( sockfd, mc->amp, qlen*sizeof(int16_t))/sizeof(int16_t);
+
+                if (fax_rx(mc->fax, mc->amp, mc->len)) {
+
+                    break;
+                }
+
+                if (!mc->done) {
+
+                    alldone = FALSE;
+                }
+            }
+
+            if (alldone)//  ||  j < FAX_MACHINES)
+            {
+                t30_stats_t t;
+
+                t30_get_transfer_statistics(fax_get_t30_state(mc->fax), &t);
+
+                typedef struct result_ {
+                    int bitrate;
+                    int pages_tx;
+                    int pages_rx;
+                } result;
+
+                result r= { t.bit_rate, t.pages_tx, t.pages_rx };
+                int len= sizeof( result)/2;
+
+                write( sockfd, &len, 4);
+                write( sockfd, &r, sizeof(result));
+
+                printf("Sending summary %d\n", len);
+
+                break;
+            }
+
+        }
+    }
+
     time(&end_time);
     for (j = 0;  j < FAX_MACHINES;  j++)
     {
