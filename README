@@ -1,3 +1,5 @@
+./configure --enable-tests --enable-mmx --enable-sse --enable-sse2 --enable-sse3 --enable-ssse3
+
 spandsp 0.0.5 - A DSP library for telephony
 -------------------------------------------
 
