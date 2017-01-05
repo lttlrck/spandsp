@@ -479,12 +479,6 @@ int main(int argc, char *argv[])
 
     if( receiver || sender) {
 
-        // char * fn = pipe_name;
-        // struct sockaddr_un ca;
-        // memset(&ca, 0, sizeof(ca));
-        // ca.sun_family = AF_UNIX;
-        // strncpy(ca.sun_path, fn, 104);
-
         struct sockaddr_in car;
 
         memset(&car, 0, sizeof(car));
@@ -493,7 +487,7 @@ int main(int argc, char *argv[])
         car.sin_port = htons(atoi(pipe_name));
         car.sin_addr.s_addr = inet_addr("127.10.10.100");//htonl(INADDR_ANY);
 
-        // bzero(&(car.sin_zero),8);
+        bzero(&(car.sin_zero),8);
 
         struct sockaddr_in cas;
 
@@ -503,7 +497,7 @@ int main(int argc, char *argv[])
         cas.sin_port = htons(atoi(pipe_name)+10000);
         cas.sin_addr.s_addr = inet_addr("127.10.10.100");//htonl(INADDR_ANY);
 
-        // bzero(&(cas.sin_zero),8);
+        bzero(&(cas.sin_zero),8);
 
         const int sockfd= socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
