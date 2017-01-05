@@ -40,8 +40,7 @@
 #include <sndfile.h>
 
 #include <sys/socket.h>
-#include <sys/un.h>
-#include <poll.h>
+#include <netinet/in.h>
 
 
 //#if defined(WITH_SPANDSP_INTERNALS)
@@ -55,7 +54,7 @@
 
 #define SAMPLES_PER_CHUNK       160
 
-#define INPUT_TIFF_FILE_NAME    "./test-data/itu/fax/itutests.tif"
+#define INPUT_TIFF_FILE_NAME    "./test-data/itu/fax/itu8.tif"
 
 #define OUTPUT_FILE_NAME_WAVE   "fax_tests.wav"
 
@@ -64,9 +63,7 @@
 struct machine_s
 {
     int chan;
-    // int16_t amp[SAMPLES_PER_CHUNK];
     int16_t amp[SAMPLES_PER_CHUNK];
-    // int len;
     int len;
     fax_state_t *fax;
     awgn_state_t *awgn;
@@ -419,14 +416,14 @@ int main(int argc, char *argv[])
         fax_set_transmit_on_idle(mc->fax, use_transmit_on_idle);
         fax_set_tep_mode(mc->fax, use_tep);
         t30 = fax_get_t30_state(mc->fax);
-        t30_set_tx_ident(t30, buf);
+        t30_set_tx_ident(t30, "555-2368");
         t30_set_tx_sub_address(t30, "Sub-address");
         t30_set_tx_sender_ident(t30, "Sender ID");
         t30_set_tx_password(t30, "Password");
         t30_set_tx_polled_sub_address(t30, "Polled sub-address");
         t30_set_tx_selective_polling_address(t30, "Selective polling address");
         t30_set_tx_page_header_info(t30, page_header_info);
-        t30_set_tx_nsf(t30, (const uint8_t *) "\x50\x00\x00\x00Spandsp\x00", 12);
+        t30_set_tx_nsf(t30, (const uint8_t *) "\x50\x00\x00\x00Valid8!\x00", 12);
         t30_set_ecm_capability(t30, use_ecm);
         t30_set_supported_t30_features(t30,
                                        T30_SUPPORT_IDENTIFICATION
@@ -617,91 +614,54 @@ int main(int argc, char *argv[])
 
     if( receiver || sender) {
 
-        char * fn = pipe_name;
-        struct sockaddr_un ca;
-        memset(&ca, 0, sizeof(ca));
-        ca.sun_family = AF_UNIX;
-        strncpy(ca.sun_path, fn, 104);
+        struct sockaddr_in car;
 
-        int sockfd= socket( AF_UNIX, SOCK_STREAM, 0);
+        memset(&car, 0, sizeof(car));
 
-        printf("Socket %d %s\n", sockfd, fn);
+        car.sin_family = AF_INET;
+        car.sin_port = htons(atoi(pipe_name));
+        car.sin_addr.s_addr = inet_addr("127.10.10.100");//htonl(INADDR_ANY);
+
+        bzero(&(car.sin_zero),8);
+
+        struct sockaddr_in cas;
+
+        memset(&cas, 0, sizeof(cas));
+
+        cas.sin_family = AF_INET;
+        cas.sin_port = htons(atoi(pipe_name)+10000);
+        cas.sin_addr.s_addr = inet_addr("127.10.10.100");//htonl(INADDR_ANY);
+
+        bzero(&(cas.sin_zero),8);
+
+        const int sockfd= socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+
+        printf("Socket %d %d %08x %d %08x %d \n", sockfd, atoi(pipe_name), car.sin_addr.s_addr, car.sin_port, cas.sin_addr.s_addr, cas.sin_port);
 
         if( receiver) {
 
             j= 1;
 
-            if( b2b) {
+            int b= bind( sockfd, &car, sizeof(car));
 
-                int r= connect( sockfd, (struct sockaddr *) &ca, sizeof(ca));
+            perror("Bind");
 
-                printf("Connect %d %d\n", r, getpid());
-            }
-            else {
+            int c= connect( sockfd, &cas, sizeof(cas));
 
-                unlink( fn);
-
-                int r= bind( sockfd, (struct sockaddr *) &ca, sizeof(ca));
-
-                printf("Bind %d\n", r);
-
-                if( listen( sockfd, 5) == -1) {
-                    perror("listen error");
-                }
-
-                int cl;
-
-                while (1) {
-
-                    if ( (cl = accept(sockfd, NULL, NULL)) == -1) {
-                      perror("accept error");
-                      continue;
-                    } else {
-                        break;
-                    }
-                }
-
-                sockfd= cl;
-            }
+            perror("Connect");
         }
         else {
 
             j= 0;
 
-            unlink( fn);
+            int b= bind( sockfd, &cas, sizeof(cas));
 
-            int r= bind( sockfd, (struct sockaddr *) &ca, sizeof(ca));
+            perror("Bind");
 
-            printf("Bind %d\n", r);
+            int c= connect( sockfd, &car, sizeof(car));
 
-            if( listen( sockfd, 5) == -1) {
-                perror("listen error");
-            }
-
-            int cl;
-
-            while (1) {
-
-                if ( (cl = accept(sockfd, NULL, NULL)) == -1) {
-                  perror("accept error");
-                  continue;
-                } else {
-                    break;
-                }
-            }
-
-            sockfd= cl;
+            perror("Connect");
         }
-
-        struct pollfd fd;
-        int ret;
-
-        fd.fd = sockfd;
-        fd.events = POLLIN;
-
-        char block= 0;
-
-        if( sender) block= 1;
 
         for( ;;) {
 
@@ -713,11 +673,7 @@ int main(int argc, char *argv[])
 
                 mc->len = fax_tx(mc->fax, mc->amp, SAMPLES_PER_CHUNK);
 
-                uint32_t qlen= mc->len;
-
-                write( sockfd, &qlen, 4);
-
-                int sent= write( sockfd, mc->amp, mc->len*sizeof(int16_t));
+                int sent= send( sockfd, mc->amp, mc->len*sizeof(int16_t), 0);
 
                 mc->total_audio_time += SAMPLES_PER_CHUNK;
 
@@ -730,13 +686,35 @@ int main(int argc, char *argv[])
                     span_log_bump_samples(logging, mc->len);
                 }
 
-                t30 = fax_get_t30_state(mc->fax);
+                // t30 = fax_get_t30_state(mc->fax);
 
-                read( sockfd, &qlen, 4);
+                // fd_set rfds;
+                // struct timeval tv;
+                // int retval;
 
-                mc->len = read( sockfd, mc->amp, qlen*sizeof(int16_t))/sizeof(int16_t);
+                // FD_ZERO(&rfds);
+                // FD_SET(sockfd, &rfds);
 
-                if (fax_rx(mc->fax, mc->amp, mc->len)) {
+                // tv.tv_sec  = 0;
+                // tv.tv_usec = 5000;
+
+                // if( ret= select(sockfd+1, &rfds, NULL, NULL, &tv) >= 0) {
+
+                //     if( FD_ISSET(sockfd, &rfds)) {
+
+                //     }
+                // }
+
+                mc->len = recv( sockfd, mc->amp, SAMPLES_PER_CHUNK*sizeof(int16_t), 0);
+
+                if( mc->len < 0) {
+
+                    usleep( 1000);
+
+                    continue;
+                }
+
+                if (fax_rx(mc->fax, mc->amp, SAMPLES_PER_CHUNK)) {
 
                     break;
                 }
@@ -753,23 +731,12 @@ int main(int argc, char *argv[])
 
                 t30_get_transfer_statistics(fax_get_t30_state(mc->fax), &t);
 
-                typedef struct result_ {
-                    int bitrate;
-                    int pages_tx;
-                    int pages_rx;
-                } result;
+                send( sockfd, &t, sizeof(t30_stats_t), 0);
 
-                result r= { t.bit_rate, t.pages_tx, t.pages_rx };
-                int len= sizeof( result)/2;
-
-                write( sockfd, &len, 4);
-                write( sockfd, &r, sizeof(result));
-
-                printf("Sending summary %d\n", len);
+                printf("Sending summary\n");
 
                 break;
             }
-
         }
     }
 
@@ -777,6 +744,7 @@ int main(int argc, char *argv[])
     for (j = 0;  j < FAX_MACHINES;  j++)
     {
         mc = &machines[j];
+
         fax_release(mc->fax);
     }
     if (log_audio)

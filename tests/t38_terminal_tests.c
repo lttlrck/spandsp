@@ -52,9 +52,7 @@ These tests exercise the path
 #include <unistd.h>
 #endif
 #include <sys/socket.h>
-#include <sys/un.h>
 #include <netinet/in.h>
-#include <poll.h>
 
 //#if defined(WITH_SPANDSP_INTERNALS)
 #define SPANDSP_EXPOSE_INTERNAL_STRUCTURES
