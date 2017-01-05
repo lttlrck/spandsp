@@ -81,7 +81,7 @@ char receiver = FALSE;
 char sender = FALSE;
 char b2b = FALSE;
 char default_code = TRUE;
-
+char enableLog= FALSE;
 double when = 0.0;
 
 int done[2] = {FALSE, FALSE};
@@ -91,46 +91,53 @@ int simulate_incrementing_repeats = FALSE;
 
 static int phase_b_handler(t30_state_t *s, void *user_data, int result)
 {
-    int i;
-    char tag[20];
+    if(enableLog) {
+        int i;
+        char tag[20];
 
-    i = (int) (intptr_t) user_data;
-    snprintf(tag, sizeof(tag), "%c: Phase B", i);
-    printf("%c: Phase B handler on channel %c - (0x%X) %s\n", i, i, result, t30_frametype(result));
-    log_rx_parameters(s, tag);
+        i = (int) (intptr_t) user_data;
+        snprintf(tag, sizeof(tag), "%c: Phase B", i);
+        printf("%c: Phase B handler on channel %c - (0x%X) %s\n", i, i, result, t30_frametype(result));
+        log_rx_parameters(s, tag);
+    }
     return T30_ERR_OK;
 }
 /*- End of function --------------------------------------------------------*/
 
 static int phase_d_handler(t30_state_t *s, void *user_data, int result)
 {
-    int i;
-    char tag[20];
+    if(enableLog) {
+        int i;
+        char tag[20];
 
-    i = (int) (intptr_t) user_data;
-    snprintf(tag, sizeof(tag), "%c: Phase D", i);
-    printf("%c: Phase D handler on channel %c - (0x%X) %s\n", i, i, result, t30_frametype(result));
-    log_transfer_statistics(s, tag);
-    log_tx_parameters(s, tag);
-    log_rx_parameters(s, tag);
+        i = (int) (intptr_t) user_data;
+        snprintf(tag, sizeof(tag), "%c: Phase D", i);
+        printf("%c: Phase D handler on channel %c - (0x%X) %s\n", i, i, result, t30_frametype(result));
+        log_transfer_statistics(s, tag);
+        log_tx_parameters(s, tag);
+        log_rx_parameters(s, tag);
+    }
     return T30_ERR_OK;
 }
 /*- End of function --------------------------------------------------------*/
 
 static void phase_e_handler(t30_state_t *s, void *user_data, int result)
 {
-    int i;
-    t30_stats_t t;
-    char tag[20];
+    if(enableLog) {
 
-    i = (int) (intptr_t) user_data;
-    snprintf(tag, sizeof(tag), "%c: Phase E", i);
-    printf("%c: Phase E handler on channel %c - (%d) %s\n", i, i, result, t30_completion_code_to_str(result));
-    log_transfer_statistics(s, tag);
-    log_tx_parameters(s, tag);
-    log_rx_parameters(s, tag);
-    t30_get_transfer_statistics(s, &t);
-    succeeded[i - 'A'] = (result == T30_ERR_OK);//  &&  (t.pages_tx == 12  ||  t.pages_rx == 12);
+        int i;
+        t30_stats_t t;
+        char tag[20];
+
+        i = (int) (intptr_t) user_data;
+        snprintf(tag, sizeof(tag), "%c: Phase E", i);
+        printf("%c: Phase E handler on channel %c - (%d) %s\n", i, i, result, t30_completion_code_to_str(result));
+        log_transfer_statistics(s, tag);
+        log_tx_parameters(s, tag);
+        log_rx_parameters(s, tag);
+        t30_get_transfer_statistics(s, &t);
+        succeeded[i - 'A'] = (result == T30_ERR_OK);//  &&  (t.pages_tx == 12  ||  t.pages_rx == 12);
+    }
     //done[i - 'A'] = TRUE;
 }
 /*- End of function --------------------------------------------------------*/
@@ -156,7 +163,7 @@ static int tx_packet_handler_a(t38_core_state_t *s, void *user_data, const uint8
     }
     else
     {
-        span_log(&s->logging, SPAN_LOG_FLOW, "Send seq %d, len %d, count %d\n", s->tx_seq_no, len, count);
+        if(enableLog) span_log(&s->logging, SPAN_LOG_FLOW, "Send seq %d, len %d, count %d\n", s->tx_seq_no, len, count);
 
         for (i = 0;  i < count;  i++)
         {
@@ -169,16 +176,7 @@ static int tx_packet_handler_a(t38_core_state_t *s, void *user_data, const uint8
 
                 int sockfd= *((int *)user_data);
 
-                // int sent= write( sockfd, &len, 4);
-
                 int sent= send( sockfd, buf, len, 0);
-
-                printf("Wrote %d\n", sent);
-
-                // if( sent != len+4) {
-
-                    // printf("Write Error\n");
-                // }
             }
         }
     }
@@ -263,7 +261,7 @@ int main(int argc, char *argv[])
     g1050_speed_pattern_no = 1;
     use_gui = FALSE;
     supported_modems = T30_SUPPORT_V27TER | T30_SUPPORT_V29 | T30_SUPPORT_V17;
-    while ((opt = getopt(argc, argv, "befgi:Im:M:oOs:P:tv:")) != -1)
+    while ((opt = getopt(argc, argv, "befgi:Im:M:oOs:P:tv:L")) != -1)
     {
         switch (opt)
         {
@@ -287,6 +285,9 @@ int main(int argc, char *argv[])
             break;
         case 'I':
             simulate_incrementing_repeats = TRUE;
+            break;
+        case 'L':
+            enableLog = TRUE;
             break;
         case 'm':
             supported_modems = atoi(optarg);
@@ -533,17 +534,20 @@ int main(int argc, char *argv[])
         t38_terminal_set_config(t38_state_a, options);
         t38_terminal_set_tep_mode(t38_state_a, use_tep);
 
-        logging = t38_terminal_get_logging_state(t38_state_a);
-        span_log_set_level(logging, SPAN_LOG_DEBUG | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME);
-        span_log_set_tag(logging, "T.38-A");
+        if( enableLog) {
 
-        logging = t38_core_get_logging_state(t38_core);
-        span_log_set_level(logging, SPAN_LOG_DEBUG | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME);
-        span_log_set_tag(logging, "T.38-A");
+            logging = t38_terminal_get_logging_state(t38_state_a);
+            span_log_set_level(logging, SPAN_LOG_DEBUG | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME);
+            span_log_set_tag(logging, "T.38-A");
 
-        logging = t30_get_logging_state(t30);
-        span_log_set_level(logging, SPAN_LOG_DEBUG | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME);
-        span_log_set_tag(logging, "T.38-A");
+            logging = t38_core_get_logging_state(t38_core);
+            span_log_set_level(logging, SPAN_LOG_DEBUG | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME);
+            span_log_set_tag(logging, "T.38-A");
+
+            logging = t30_get_logging_state(t30);
+            span_log_set_level(logging, SPAN_LOG_DEBUG | SPAN_LOG_SHOW_TAG | SPAN_LOG_SHOW_SAMPLE_TIME);
+            span_log_set_tag(logging, "T.38-A");
+        }
 
         t30_set_supported_modems(t30, supported_modems);
         t30_set_tx_ident(t30, "555-2368");
@@ -619,7 +623,8 @@ int main(int argc, char *argv[])
 
         send( sockfd, &t, sizeof(t30_stats_t), 0);
 
-        printf("Sending summary\n");
+        if( enableLog)
+            printf("Sending summary\n");
 
         t38_terminal_release(t38_state_a);
     }
