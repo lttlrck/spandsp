@@ -297,13 +297,13 @@ int main(int argc, char *argv[])
             break;
         case 'o':
             default_code = FALSE;
-            sender= TRUE;
-            printf("sender\n");
+            receiver= TRUE;
+            printf("receiver\n");
             break;
         case 'O':
             default_code = FALSE;
-            receiver= TRUE;
-            printf("receiver\n");
+            sender= TRUE;
+            printf("sender\n");
             break;
         case 'P':
             pipe_name = optarg;
