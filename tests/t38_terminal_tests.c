@@ -176,7 +176,15 @@ static int tx_packet_handler_a(t38_core_state_t *s, void *user_data, const uint8
 
                 int sockfd= *((int *)user_data);
 
-                int sent= send( sockfd, buf, len, 0);
+                uint8_t data[1024];
+
+                const short seq= s->tx_seq_no & 0xFFFF;
+
+                *(short *)(&data[0])= seq;
+
+                memcpy( data+2, buf, len);
+
+                int sent= send( sockfd, data, len+2, 0);
             }
         }
     }
@@ -607,7 +615,7 @@ int main(int argc, char *argv[])
                     int l= recv( sockfd, msg, 1024, 0);
 
                     t38_core = t38_terminal_get_t38_core_state(t38_state_a);
-                    t38_core_rx_ifp_packet(t38_core, msg, l, seq_no++);
+                    t38_core_rx_ifp_packet(t38_core, msg+2, l, *(short *)(msg)); // first 2 bytes are UDPTL sequence number
                 }
             }
 
